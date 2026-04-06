@@ -6,6 +6,7 @@ from django.contrib.auth.models import User
 from datetime import date
 import requests
 from django.conf import settings
+
 from .models import Agendamento, Fidelidade, Endereco
 from .serializers import AgendamentoSerializer, FidelidadeSerializer, EnderecoSerializer
 from .permissions import IsPrestador
@@ -13,29 +14,34 @@ from .utils import get_horarios_disponiveis, is_feriado
 
 
 class AgendamentoListCreateView(generics.ListCreateAPIView):
+    queryset = Agendamento.objects.all()
     serializer_class = AgendamentoSerializer
-
-    def get_permissions(self):
-        if self.request.method == "POST":
-            return [permissions.AllowAny()]
-        return [permissions.IsAuthenticated()]
+    permission_classes = [permissions.AllowAny]
 
     def get_queryset(self):
         username = self.request.query_params.get("username")
         estado = self.request.query_params.get("estado")
 
-        if username and username == self.request.user.username:
-            qs = Agendamento.objects.filter(prestador__username=username)
-            if estado:
-                qs = qs.filter(estado=estado.upper())
-            return qs
-        return Agendamento.objects.none()
+        qs = Agendamento.objects.all()
+
+        if username:
+            qs = qs.filter(prestador__username=username)
+
+        if estado:
+            qs = qs.filter(estado=estado.upper())
+
+        return qs
 
     def perform_create(self, serializer):
         prestador_username = self.request.data.get("prestador")
-        prestador = User.objects.get(username=prestador_username)
+
+        try:
+            prestador = User.objects.get(username=prestador_username)
+        except User.DoesNotExist:
+            raise ValidationError({"erro": "Prestador não encontrado."})
 
         data_horario = serializer.validated_data.get("data_horario")
+
         if is_feriado(data_horario.date()):
             raise ValidationError(
                 {"erro": "Não é possível agendar em feriados nacionais."}
@@ -76,12 +82,15 @@ class AgendamentoConfirmarView(APIView):
 
         try:
             cliente_user = User.objects.get(email=agendamento.email_cliente)
+
             fidelidade, _ = Fidelidade.objects.get_or_create(
                 cliente=cliente_user,
                 prestador=agendamento.prestador
             )
+
             fidelidade.pontos += 1
             fidelidade.save()
+
         except User.DoesNotExist:
             pass
 
@@ -93,6 +102,7 @@ class AgendamentoExecutarView(APIView):
     permission_classes = [permissions.IsAuthenticated, IsPrestador]
 
     def post(self, request, pk):
+
         try:
             agendamento = Agendamento.objects.get(pk=pk)
         except Agendamento.DoesNotExist:
@@ -117,6 +127,7 @@ class HorariosDisponiveisView(APIView):
     permission_classes = [permissions.AllowAny]
 
     def get(self, request):
+
         username = request.query_params.get("username")
         data_str = request.query_params.get("data")
 
@@ -143,13 +154,17 @@ class HorariosDisponiveisView(APIView):
             )
 
         horarios = get_horarios_disponiveis(data, prestador)
-        return Response({"horarios_disponiveis": horarios})
+
+        return Response({
+            "horarios_disponiveis": horarios
+        })
 
 
 class EnderecoView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, username):
+
         try:
             prestador = User.objects.get(username=username)
         except User.DoesNotExist:
@@ -159,6 +174,7 @@ class EnderecoView(APIView):
             )
 
         cep = request.data.get("cep")
+
         if not cep:
             return Response(
                 {"erro": "CEP é obrigatório."},
@@ -175,14 +191,19 @@ class EnderecoView(APIView):
         }
 
         if not all([dados["estado"], dados["cidade"], dados["bairro"], dados["rua"]]):
+
             url = f"{settings.BRASILAPI_URL}/api/cep/v1/{cep}"
+
             resp = requests.get(url)
+
             if resp.status_code != 200:
                 return Response(
                     {"erro": "CEP inválido."},
                     status=status.HTTP_400_BAD_REQUEST
                 )
+
             cep_data = resp.json()
+
             dados.update({
                 "estado": cep_data.get("state", ""),
                 "cidade": cep_data.get("city", ""),
@@ -191,7 +212,9 @@ class EnderecoView(APIView):
             })
 
         serializer = EnderecoSerializer(data=dados)
+
         if serializer.is_valid():
             serializer.save(prestador=prestador)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
+
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
