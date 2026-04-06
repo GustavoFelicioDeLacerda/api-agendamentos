@@ -1,0 +1,8 @@
+[run]
+omit =
+    */migrations/*
+    agendamento_api/settings/*
+    agendamento_api/asgi.py
+    agendamento_api/wsgi.py
+    agendamento_api/urls.py
+    manage.py
